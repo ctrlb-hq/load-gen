@@ -43,6 +43,8 @@ jobs:
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "VERSION_TAG=${SHORT_SHA}" >> $GITHUB_ENV
+        env:
+          VERSION_TAG: $SHORT_SHA
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -52,7 +54,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/log-generator:latest
-            ghcr.io/${{ github.repository_owner }}/log-generator:${{ vars.outputs.VERSION_TAG }}
+            ghcr.io/${{ github.repository_owner }}/log-generator:$VERSION_TAG
 
       - name: Post-build status
         if: always()
