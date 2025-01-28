@@ -37,13 +37,12 @@ jobs:
           key: ${{ runner.os }}-buildx-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-buildx-
-      
+
       - name: Set version tag
         id: vars
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
-          VERSION_TAG="${SHORT_SHA}"
-          echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
+          echo "VERSION_TAG=${SHORT_SHA}" >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -53,13 +52,13 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/log-generator:latest
-            ghcr.io/${{ github.repository_owner }}/log-generator:${{ env.VERSION_TAG }}
+            ghcr.io/${{ github.repository_owner }}/log-generator:${{ vars.outputs.VERSION_TAG }}
 
       - name: Post-build status
         if: always()
         run: |
           echo "Docker image published to GitHub Container Registry."
-      
+
       - name: Checkout DeployHaven repo
         uses: actions/checkout@v3
         with:
@@ -69,15 +68,15 @@ jobs:
       
       - name: Debug Environment
         run: |
-          echo "VERSION_TAG: ${{ env.VERSION_TAG }}"
+          echo "VERSION_TAG: $VERSION_TAG"
           echo "Working Directory: $(pwd)"
           ls -la staging/internal-apps
 
       - name: Update load-gen.yaml
         run: |
-          sed -i "s|ghcr.io/ctrlb-hq/load-gen:.*|ghcr.io/ctrlb-hq/load-gen:${{ env.VERSION_TAG }}|" staging/internal-apps/load-gen.yaml
+          sed -i "s|ghcr.io/ctrlb-hq/load-gen:.*|ghcr.io/ctrlb-hq/load-gen:$VERSION_TAG|" staging/internal-apps/load-gen.yaml
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add staging/internal-apps/load-gen.yaml
-          git commit -m "Update load-gen image to ${{ env.VERSION_TAG }}"
-          git push origin main
+          git commit -m "Update load-gen image to $VERSION_TAG" || echo "No changes to commit"
+          git push origin main || echo "Push failed; check permissions or branch protection rules"
