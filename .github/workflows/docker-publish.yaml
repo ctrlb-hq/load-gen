@@ -55,18 +55,18 @@ jobs:
         run: |
           echo "Docker image published to GitHub Container Registry."
       
-      - name: Checkout DeployHaven repo
-        uses: actions/checkout@v3
-        with:
-          repository: ctrlb-hq/DeployHaven
-          ref: main
-          token: ${{ secrets.GHCR_PAT }}
+      # - name: Checkout DeployHaven repo
+      #   uses: actions/checkout@v3
+      #   with:
+      #     repository: ctrlb-hq/DeployHaven
+      #     ref: main
+      #     token: ${{ secrets.GHCR_PAT }}
 
-      - name: Update load-gen.yaml
-        run: |
-          sed -i "s|ghcr.io/ctrlb-hq/load-gen:.*|ghcr.io/ctrlb-hq/load-gen:${{ env.VERSION_TAG }}|" staging/internal-apps/load-gen.yaml
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add staging/internal-apps/load-gen.yaml
-          git commit -m "Update load-gen image to ${{ env.VERSION_TAG }}"
-          git push origin main
+      # - name: Update load-gen.yaml
+      #   run: |
+      #     sed -i "s|ghcr.io/ctrlb-hq/load-gen:.*|ghcr.io/ctrlb-hq/load-gen:${{ env.VERSION_TAG }}|" staging/internal-apps/load-gen.yaml
+      #     git config user.name "github-actions"
+      #     git config user.email "github-actions@github.com"
+      #     git add staging/internal-apps/load-gen.yaml
+      #     git commit -m "Update load-gen image to ${{ env.VERSION_TAG }}"
+      #     git push origin main
