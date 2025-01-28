@@ -37,6 +37,13 @@ jobs:
           key: ${{ runner.os }}-buildx-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-buildx-
+      
+      - name: Set version tag
+        id: vars
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION_TAG="${SHORT_SHA}"
+          echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_ENV
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
@@ -46,9 +53,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/log-generator:latest
-            ghcr.io/${{ github.repository_owner }}/log-generator:${{ github.sha }}
-        env:
-          VERSION_TAG: ${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/log-generator:${{ env.VERSION_TAG }}
 
       - name: Post-build status
         if: always()
