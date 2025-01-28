@@ -225,8 +225,6 @@ func main() {
 		go generateLogData(&wg, client, done)
 	}
 
-	time.Sleep(1 * time.Minute)
-	close(done)
-	wg.Wait()
-	fmt.Println("Log generation complete")
+	// Keep the program running indefinitely
+	select {}
 }
