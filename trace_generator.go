@@ -41,16 +41,20 @@ func getEnvOrDefault(key, defaultValue string) string {
 
 func loadConfig() Config {
 	cfg := defaultConfig
+	log.Println("Loading trace configuration...")
 
 	if endpoint := os.Getenv("TRACES_ENDPOINT"); endpoint != "" {
+		log.Printf("Using custom endpoint: %s", endpoint)
 		cfg.Endpoint = endpoint
 	}
 
 	if auth := os.Getenv("AUTH_HEADER"); auth != "" {
+		log.Println("Authorization header found")
 		cfg.Headers["Authorization"] = auth
 	}
 
 	if stream := os.Getenv("TRACES_STREAM"); stream != "" {
+		log.Printf("Using stream: %s", stream)
 		cfg.Headers["stream-name"] = stream
 	}
 
@@ -83,9 +87,9 @@ type Trace struct {
 }
 
 func sendTrace(trace *Trace) error {
+	log.Printf("Sending trace with %d spans...", len(trace.Spans))
 	payload, err := json.Marshal(trace)
 	if err != nil {
-		return fmt.Errorf("error marshaling trace: %v", err)
 	}
 
 	req, err := http.NewRequest("POST", tracesConfig.Endpoint, bytes.NewBuffer(payload))
@@ -102,14 +106,17 @@ func sendTrace(trace *Trace) error {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("Error sending trace: %v", err)
 		return fmt.Errorf("error sending trace: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("Unexpected status code: %d", resp.StatusCode)
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	log.Printf("Successfully sent trace with %d spans", len(trace.Spans))
 	return nil
 }
 
@@ -169,19 +176,25 @@ func generateTrace(ctx context.Context) error {
 }
 
 func startTraceGeneration(ctx context.Context) error {
+	log.Println("Starting trace generation...")
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
+	traceCount := 0
 	for {
 		select {
 		case <-ticker.C:
+			traceCount++
+			log.Printf("Generating trace #%d", traceCount)
 			if err := generateTrace(ctx); err != nil {
 				if err == context.Canceled {
+					log.Println("Trace generation canceled")
 					return err
 				}
-				log.Printf("Error generating trace: %v", err)
+				log.Printf("Error generating trace #%d: %v", traceCount, err)
 			}
 		case <-ctx.Done():
+			log.Println("Stopping trace generation...")
 			return ctx.Err()
 		}
 	}
