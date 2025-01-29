@@ -5,6 +5,7 @@ import (
     "encoding/json"
     "fmt"
     "log"
+    "math/rand"
     "net/http"
     "os"
     "strconv"
@@ -15,13 +16,30 @@ import (
     "github.com/brianvoe/gofakeit/v6"
 )
 
-// Move shared configuration to a separate package or config struct
-var config struct {
-    LogEndpoint string
-    AuthHeader  string
-    LogRate     int
-    BatchSize   int
+// LogRecord represents a single log entry
+type LogRecord struct {
+    Level     string `json:"level"`
+    Job       string `json:"job"`
+    Log       string `json:"log"`
+    Timestamp string `json:"_timestamp"`
 }
+
+// Global variables
+var (
+    totalBytesSent int64
+    jobTypes       = []string{
+        "user-service", "payment-processor", "order-management",
+        "inventory-service", "notification-service", "authentication-service",
+        "search-service", "recommendation-engine", "email-service", "analytics-processor",
+    }
+    dbTypes = []string{"postgres", "mysql", "mongodb", "redis", "elasticsearch", "cassandra"}
+    config  struct {
+        LogEndpoint string
+        AuthHeader  string
+        LogRate     int
+        BatchSize   int
+    }
+)
 
 func init() {
     config.LogEndpoint = os.Getenv("LOG_ENDPOINT")
@@ -31,10 +49,86 @@ func init() {
     config.AuthHeader = os.Getenv("AUTH_HEADER")
     config.LogRate = getEnvInt("LOG_RATE", 1)
     config.BatchSize = getEnvInt("BATCH_SIZE", 100)
+
+    // Initialize random seed
+    rand.Seed(time.Now().UnixNano())
 }
 
-// Rest of your existing LogRecord struct and variables...
+// getEnvInt retrieves an integer from environment variables with a default value
+func getEnvInt(key string, defaultValue int) int {
+    if val, err := strconv.Atoi(os.Getenv(key)); err == nil {
+        return val
+    }
+    return defaultValue
+}
 
+// getRandomLogLevel returns a random log level based on weighted distribution
+func getRandomLogLevel() string {
+    weights := map[string]int{
+        "debug": 15,
+        "info":  60,
+        "warn":  20,
+        "error": 5,
+    }
+    total := 0
+    for _, weight := range weights {
+        total += weight
+    }
+
+    r := rand.Intn(total)
+    current := 0
+    for level, weight := range weights {
+        current += weight
+        if r < current {
+            return level
+        }
+    }
+    return "info"
+}
+
+// generateRandomEvent creates a random log message
+func generateRandomEvent() string {
+    events := []string{
+        "Processing request from %s",
+        "Handled %s request in %dms",
+        "Connected to %s",
+        "Cache hit for key: %s",
+        "Updated user profile for %s",
+        "Received webhook from %s",
+        "API rate limit: %d requests remaining",
+        "Successfully processed transaction %s",
+        "Queue size reached %d messages",
+        "Memory usage at %d%%",
+    }
+    eventTemplate := events[rand.Intn(len(events))]
+
+    switch eventTemplate {
+    case "Processing request from %s":
+        return fmt.Sprintf(eventTemplate, gofakeit.Email())
+    case "Handled %s request in %dms":
+        return fmt.Sprintf(eventTemplate, gofakeit.HTTPMethod(), rand.Intn(490)+10)
+    case "Connected to %s":
+        return fmt.Sprintf(eventTemplate, dbTypes[rand.Intn(len(dbTypes))])
+    case "Cache hit for key: %s":
+        return fmt.Sprintf(eventTemplate, gofakeit.UUID())
+    case "Updated user profile for %s":
+        return fmt.Sprintf(eventTemplate, gofakeit.Email())
+    case "Received webhook from %s":
+        return fmt.Sprintf(eventTemplate, gofakeit.URL())
+    case "API rate limit: %d requests remaining":
+        return fmt.Sprintf(eventTemplate, rand.Intn(1000))
+    case "Successfully processed transaction %s":
+        return fmt.Sprintf(eventTemplate, gofakeit.UUID())
+    case "Queue size reached %d messages":
+        return fmt.Sprintf(eventTemplate, rand.Intn(10000))
+    case "Memory usage at %d%%":
+        return fmt.Sprintf(eventTemplate, rand.Intn(100))
+    default:
+        return "Default log message"
+    }
+}
+
+// generateLogData continuously generates and sends log data
 func generateLogData(wg *sync.WaitGroup, client *http.Client, done chan bool) {
     defer wg.Done()
     ticker := time.NewTicker(time.Second / time.Duration(config.LogRate))
@@ -51,7 +145,7 @@ func generateLogData(wg *sync.WaitGroup, client *http.Client, done chan bool) {
             for i := 0; i < config.BatchSize; i++ {
                 batch[i] = LogRecord{
                     Level:     getRandomLogLevel(),
-                    Job:       jobTypes[gofakeit.IntRange(0, len(jobTypes)-1)],
+                    Job:       jobTypes[rand.Intn(len(jobTypes))],
                     Log:       generateRandomEvent(),
                     Timestamp: now.Format(time.RFC3339),
                 }
@@ -64,6 +158,7 @@ func generateLogData(wg *sync.WaitGroup, client *http.Client, done chan bool) {
     }
 }
 
+// sendLogBatch sends a batch of logs to the configured endpoint
 func sendLogBatch(client *http.Client, logBatch []LogRecord) error {
     batchData, err := json.Marshal(logBatch)
     if err != nil {
