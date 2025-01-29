@@ -13,10 +13,21 @@ import (
 	"time"
 )
 
+type Config struct {
+	Endpoint string            `json:"endpoint"`
+	Headers  map[string]string `json:"headers"`
+}
+
 var (
-	endpoint   = getEnvOrDefault("TRACE_ENDPOINT", "http://localhost:4318/traces")
-	authHeader = getEnvOrDefault("AUTH_HEADER", "")
-	client     = &http.Client{Timeout: 10 * time.Second}
+	defaultConfig = Config{
+		Endpoint: "http://localhost:4318/traces",
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+			"stream-name":  "default",
+		},
+	}
+	tracesConfig = loadConfig()
+	client       = &http.Client{Timeout: 10 * time.Second}
 )
 
 var serviceNames = []string{"user-service", "order-service", "payment-service", "inventory-service"}
@@ -26,6 +37,24 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func loadConfig() Config {
+	cfg := defaultConfig
+
+	if endpoint := os.Getenv("TRACES_ENDPOINT"); endpoint != "" {
+		cfg.Endpoint = endpoint
+	}
+
+	if auth := os.Getenv("AUTH_HEADER"); auth != "" {
+		cfg.Headers["Authorization"] = auth
+	}
+
+	if stream := os.Getenv("TRACES_STREAM"); stream != "" {
+		cfg.Headers["stream-name"] = stream
+	}
+
+	return cfg
 }
 
 func generateRandomID() string {
@@ -59,14 +88,16 @@ func sendTrace(trace *Trace) error {
 		return fmt.Errorf("error marshaling trace: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(payload))
+	req, err := http.NewRequest("POST", tracesConfig.Endpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		return fmt.Errorf("error creating request: %v", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	if authHeader != "" {
-		req.Header.Set("Authorization", authHeader)
+	fmt.Printf("Auth Header: %v\n", tracesConfig.Headers["Authorization"])
+	fmt.Println("Endpoint: ", tracesConfig.Endpoint)
+	// Set all configured headers
+	for key, value := range tracesConfig.Headers {
+		req.Header.Set(key, value)
 	}
 
 	resp, err := client.Do(req)
@@ -82,7 +113,7 @@ func sendTrace(trace *Trace) error {
 	return nil
 }
 
-func generateTrace() error {
+func generateTrace(ctx context.Context) error {
 	traceID := generateRandomID()
 	trace := &Trace{Spans: make([]Span, 0)}
 	now := time.Now()
@@ -99,24 +130,36 @@ func generateTrace() error {
 
 	// Process services
 	for _, service := range serviceNames {
-		childSpan := Span{
-			TraceID:     traceID,
-			SpanID:      generateRandomID(),
-			ParentID:    rootSpan.SpanID,
-			Name:        service,
-			StartTime:   now.Add(time.Duration(mathrand.Intn(100)) * time.Millisecond).UnixNano(),
-			ServiceName: service,
-			Attributes: map[string]string{
-				"span.kind":    "client",
-				"operation":    "process_request",
-				"service.name": service,
-			},
-		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			childSpan := Span{
+				TraceID:     traceID,
+				SpanID:      generateRandomID(),
+				ParentID:    rootSpan.SpanID,
+				Name:        service,
+				StartTime:   now.Add(time.Duration(mathrand.Intn(100)) * time.Millisecond).UnixNano(),
+				ServiceName: service,
+				Attributes: map[string]string{
+					"span.kind":    "client",
+					"operation":    "process_request",
+					"service.name": service,
+				},
+			}
 
-		// Simulate processing time
-		time.Sleep(time.Millisecond * time.Duration(100+mathrand.Intn(200)))
-		childSpan.EndTime = time.Now().UnixNano()
-		trace.Spans = append(trace.Spans, childSpan)
+			// Replace time.Sleep with context-aware sleep
+			timer := time.NewTimer(time.Millisecond * time.Duration(100+mathrand.Intn(200)))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+
+			childSpan.EndTime = time.Now().UnixNano()
+			trace.Spans = append(trace.Spans, childSpan)
+		}
 	}
 
 	rootSpan.EndTime = time.Now().UnixNano()
@@ -125,15 +168,17 @@ func generateTrace() error {
 	return sendTrace(trace)
 }
 
-func startTraceGeneration() error {
-	ctx := context.Background()
+func startTraceGeneration(ctx context.Context) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
-			if err := generateTrace(); err != nil {
+			if err := generateTrace(ctx); err != nil {
+				if err == context.Canceled {
+					return err
+				}
 				log.Printf("Error generating trace: %v", err)
 			}
 		case <-ctx.Done():
