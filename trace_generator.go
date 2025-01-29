@@ -37,12 +37,15 @@ func getEnvOrDefault(key, defaultValue string) string {
 func initTracer() (*sdktrace.TracerProvider, error) {
     ctx := context.Background()
     
+    headers := map[string]string{
+        "Authorization": authHeader,
+        "stream-name":  "default",
+    }
+
     exporter, err := otlptracehttp.New(ctx,
         otlptracehttp.WithEndpoint(otelEndpoint),
-        otlptracehttp.WithHeaders(map[string]string{
-            "Authorization": authHeader,
-        }),
-        otlptracehttp.WithInsecure(), // Remove this if using TLS
+        otlptracehttp.WithHeaders(headers),
+        otlptracehttp.WithURLPath("/"), // Since the endpoint already includes the full path
     )
     if err != nil {
         return nil, fmt.Errorf("failed to create OTLP trace exporter: %v", err)
@@ -52,6 +55,7 @@ func initTracer() (*sdktrace.TracerProvider, error) {
         resource.WithAttributes(
             semconv.ServiceName("trace-generator"),
             semconv.ServiceVersion("1.0.0"),
+            attribute.String("stream-name", "default"),
         ),
         resource.WithSchemaURL(semconv.SchemaURL),
     )
@@ -60,7 +64,10 @@ func initTracer() (*sdktrace.TracerProvider, error) {
     }
 
     tp := sdktrace.NewTracerProvider(
-        sdktrace.WithBatcher(exporter),
+        sdktrace.WithBatcher(exporter,
+            sdktrace.WithBatchTimeout(5*time.Second),
+            sdktrace.WithMaxExportBatchSize(512),
+        ),
         sdktrace.WithResource(res),
         sdktrace.WithSampler(sdktrace.AlwaysSample()),
     )
@@ -70,6 +77,7 @@ func initTracer() (*sdktrace.TracerProvider, error) {
     
     return tp, nil
 }
+
 
 // Simulates a trace flow across multiple services
 func generateTrace(ctx context.Context) error {
