@@ -37,15 +37,19 @@ func getEnvOrDefault(key, defaultValue string) string {
 func initTracer() (*sdktrace.TracerProvider, error) {
     ctx := context.Background()
     
+    // Parse endpoint to separate host and path
+    endpoint := strings.TrimPrefix(otelEndpoint, "https://")
+    endpoint = strings.TrimPrefix(endpoint, "http://")
+    
     headers := map[string]string{
         "Authorization": authHeader,
         "stream-name":  "default",
     }
 
     exporter, err := otlptracehttp.New(ctx,
-        otlptracehttp.WithEndpoint(otelEndpoint),
+        otlptracehttp.WithEndpoint(endpoint),
         otlptracehttp.WithHeaders(headers),
-        otlptracehttp.WithURLPath("/"), // Since the endpoint already includes the full path
+        otlptracehttp.WithInsecure(), // Remove this if using HTTPS
     )
     if err != nil {
         return nil, fmt.Errorf("failed to create OTLP trace exporter: %v", err)
