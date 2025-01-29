@@ -1,31 +1,25 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log"
-	"math/rand"
+	mathrand "math/rand"
+	"net/http"
 	"os"
-	"strings"
 	"time"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
-var tracer trace.Tracer
-var serviceNames = []string{"user-service", "order-service", "payment-service", "inventory-service"}
-
-// Reads environment variables
 var (
-	otelEndpoint = getEnvOrDefault("OTEL_TRACE_ENDPOINT", "localhost:4318")
-	authHeader   = getEnvOrDefault("AUTH_HEADER", "")
+	endpoint   = getEnvOrDefault("TRACE_ENDPOINT", "http://localhost:4318/traces")
+	authHeader = getEnvOrDefault("AUTH_HEADER", "")
+	client     = &http.Client{Timeout: 10 * time.Second}
 )
+
+var serviceNames = []string{"user-service", "order-service", "payment-service", "inventory-service"}
 
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
@@ -34,106 +28,104 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// Initializes the OpenTelemetry tracer provider
-func initTracer() (*sdktrace.TracerProvider, error) {
-	ctx := context.Background()
-
-	// Parse endpoint to separate host and path
-	endpoint := strings.TrimPrefix(otelEndpoint, "https://")
-	endpoint = strings.TrimPrefix(endpoint, "http://")
-
-	headers := map[string]string{
-		"Authorization": authHeader,
-		"stream-name":   "default",
-	}
-
-	exporter, err := otlptracehttp.New(ctx,
-		otlptracehttp.WithEndpoint(endpoint),
-		otlptracehttp.WithHeaders(headers),
-		otlptracehttp.WithInsecure(), // Remove this if using HTTPS
-	)
+func generateRandomID() string {
+	bytes := make([]byte, 16)
+	_, err := cryptorand.Read(bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP trace exporter: %v", err)
+		log.Fatalf("error reading random bytes: %v", err)
 	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("trace-generator"),
-			semconv.ServiceVersion("1.0.0"),
-			attribute.String("stream-name", "default"),
-		),
-		resource.WithSchemaURL(semconv.SchemaURL),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %v", err)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter,
-			sdktrace.WithBatchTimeout(5*time.Second),
-			sdktrace.WithMaxExportBatchSize(512),
-		),
-		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
-
-	otel.SetTracerProvider(tp)
-	tracer = tp.Tracer("trace-generator")
-
-	return tp, nil
+	return fmt.Sprintf("%x", bytes)
 }
 
-// Simulates a trace flow across multiple services
-func generateTrace(ctx context.Context) error {
-	ctx, rootSpan := tracer.Start(ctx, "API Request")
-	defer rootSpan.End()
+// Trace structures
+type Span struct {
+	TraceID     string            `json:"traceId"`
+	SpanID      string            `json:"spanId"`
+	ParentID    string            `json:"parentId,omitempty"`
+	Name        string            `json:"name"`
+	StartTime   int64             `json:"startTime"`
+	EndTime     int64             `json:"endTime"`
+	ServiceName string            `json:"serviceName"`
+	Attributes  map[string]string `json:"attributes"`
+}
 
-	rootSpan.SetAttributes(
-		attribute.String("trace_id", rootSpan.SpanContext().TraceID().String()),
-		attribute.String("span.kind", "server"),
-	)
+type Trace struct {
+	Spans []Span `json:"spans"`
+}
 
-	// Simulating interlinked spans across services
+func sendTrace(trace *Trace) error {
+	payload, err := json.Marshal(trace)
+	if err != nil {
+		return fmt.Errorf("error marshaling trace: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", endpoint, bytes.NewBuffer(payload))
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending trace: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func generateTrace() error {
+	traceID := generateRandomID()
+	trace := &Trace{Spans: make([]Span, 0)}
+	now := time.Now()
+
+	// Root span
+	rootSpan := Span{
+		TraceID:     traceID,
+		SpanID:      generateRandomID(),
+		Name:        "API Request",
+		StartTime:   now.UnixNano(),
+		ServiceName: "trace-generator",
+		Attributes:  map[string]string{"span.kind": "server"},
+	}
+
+	// Process services
 	for _, service := range serviceNames {
-		if err := processService(ctx, service); err != nil {
-			return fmt.Errorf("error processing service %s: %v", service, err)
+		childSpan := Span{
+			TraceID:     traceID,
+			SpanID:      generateRandomID(),
+			ParentID:    rootSpan.SpanID,
+			Name:        service,
+			StartTime:   now.Add(time.Duration(mathrand.Intn(100)) * time.Millisecond).UnixNano(),
+			ServiceName: service,
+			Attributes: map[string]string{
+				"span.kind":    "client",
+				"operation":    "process_request",
+				"service.name": service,
+			},
 		}
+
+		// Simulate processing time
+		time.Sleep(time.Millisecond * time.Duration(100+mathrand.Intn(200)))
+		childSpan.EndTime = time.Now().UnixNano()
+		trace.Spans = append(trace.Spans, childSpan)
 	}
 
-	return nil
+	rootSpan.EndTime = time.Now().UnixNano()
+	trace.Spans = append(trace.Spans, rootSpan)
+
+	return sendTrace(trace)
 }
 
-func processService(ctx context.Context, serviceName string) error {
-	ctx, span := tracer.Start(ctx, serviceName)
-	defer span.End()
-
-	span.SetAttributes(
-		attribute.String("service.name", serviceName),
-		attribute.String("operation", "process_request"),
-		attribute.String("span.kind", "client"),
-	)
-
-	// Simulate processing time with some randomness
-	time.Sleep(time.Millisecond * time.Duration(100+rand.Intn(200)))
-
-	return nil
-}
-
-// Starts the infinite trace generation
 func startTraceGeneration() error {
-	tp, err := initTracer()
-	if err != nil {
-		return fmt.Errorf("failed to initialize tracer: %v", err)
-	}
-
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := tp.Shutdown(ctx); err != nil {
-			log.Printf("Error shutting down tracer provider: %v", err)
-		}
-	}()
-
 	ctx := context.Background()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -141,7 +133,7 @@ func startTraceGeneration() error {
 	for {
 		select {
 		case <-ticker.C:
-			if err := generateTrace(ctx); err != nil {
+			if err := generateTrace(); err != nil {
 				log.Printf("Error generating trace: %v", err)
 			}
 		case <-ctx.Done():
